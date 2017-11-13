@@ -1,0 +1,10 @@
+//This program was tested on the EightyOne Emulator and works.
+
+//10 REM AAAAAAAAAA
+//20 LET A=USR 16514
+//30 PRINT A
+
+ld h, 23
+.outerZero
+#inject <include1.bda>
+ret

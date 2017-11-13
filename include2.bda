@@ -1,0 +1,4 @@
+ld a, h
+.innerTwo
+#inject <include3.bda>
+ld b, 0

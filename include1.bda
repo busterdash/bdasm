@@ -1,0 +1,4 @@
+ld l, 43
+.innerOne
+#inject <include2.bda>
+ld c, a

@@ -1,0 +1,11 @@
+*.win
+*.dev
+*.layout
+*.o
+*.exe
+*.xcf
+siasm_private.res
+siasm_private.h
+siasm_private.rc
+siasm.ico
+/test
