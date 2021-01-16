@@ -1,7 +1,7 @@
 /*==============================================================================================
 	
 	z80database.sql
-	Copyright 2019 Buster Schrader
+	Copyright 2019-2021 Buster Schrader
 	
 	This file is part of SIASM.
 	
