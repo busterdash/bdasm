@@ -147,7 +147,7 @@ bool preprocessor::process_labels(string &line)
                 display_error(line_num_out, "duplicate labels, " + label_name + " is already in use.");
         }
         
-        if (bs_util::is_all_alphabetic(label_name)) //add our label to the list if it is properly defined
+        if (bs_util::is_var_name(label_name)) //add our label to the list if it is properly defined
         {
             l = new label();
             l->name = label_name;

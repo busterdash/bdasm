@@ -53,7 +53,7 @@ namespace bs_util
     string trim_left(string input);                 //trims only spaces from the left side of a string
     string trim_right(string input);                //trims only spaces from the right side of a string
     string trim(string input);                      //trims only spaces from both sides of a string
-    bool   is_all_alphabetic(string input);         //returns true if all characters are alphabetic
+    bool   is_var_name(string input);               //returns true if input follows variable naming convention
     bool   is_all_numeric(string input);            //returns true if all characters are numeric
     bool   is_pointer(string input);                //returns true if surrounded by parenthesis
     int    quad_str_to_int(string input);           //turns a string of four characters into an int

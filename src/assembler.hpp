@@ -53,7 +53,6 @@ class assembler
     int inst_value;        //instruction value byte
     int start_address;     //mem location of first byte of assembled code on the foreign machine
     int byte_count;        //output-byte count; increases through program execution and is used for address calculation
-    bool line_is_label;    //if the line we are on is a label, then this will be true
     vector<int> outbytes;  //assembled instructions
     vector<label*> labels; //location of preprocessor's labels
 
@@ -74,7 +73,10 @@ class assembler
 
     //attempts alternatives if a single scan cannot decide how to assemble an instruction
     bool resolve_instruction(int &error_amount, int &line_num, string mnem, string arg1, string arg2);
-    
+
+    //converts label arguments into placeholder numbers and pushes byte location?
+    void process_label_arguments(string &arg1, string &arg2);
+
     //sets memory addresses for each label found in the program
     void resolve_label_addresses(int &line_num, int &next_line);
 

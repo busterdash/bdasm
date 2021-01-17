@@ -124,16 +124,21 @@ string bs_util::trim(string input)
     return input;
 }
 
-bool bs_util::is_all_alphabetic(string input)
+bool bs_util::is_var_name(string input)
 {
     int i = 0;
     bool output = true;
+
+    if (input.length() < 1) output = false;
     
     while (i < input.length())
     {
         short c = short(input[i]);
+        bool alpha =   ((c > 64 && c <= 90) || (c > 96 && c <= 122));
+        bool numeric = (c > 47 && c <= 57);
+        bool symbol =  (c == 95); //underscore
         
-        if (!((c > 64 && c <= 90) || (c > 96 && c <= 122)))
+        if (!(alpha || (i > 0 && (symbol || numeric))))
         {
             output = false;
             break;

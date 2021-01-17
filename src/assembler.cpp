@@ -85,7 +85,7 @@ void assembler::run()
                 continue;
 
             read(instline, mnemonic, argument1, argument2);
-
+            process_label_arguments(argument1, argument2);
             resolve_label_addresses(line_number, next_label_line);
 
             if (!resolve_instruction(error_count, line_number, mnemonic, argument1, argument2))
@@ -330,9 +330,13 @@ void assembler::adjust_values(int pass, string *arg)
 
 bool assembler::resolve_instruction(int &error_amount, int &line_num, string mnem, string arg1, string arg2)
 {
-    string* test_arg;
-    int arg_byte_output = 0; //28x0 0ABB where A is which argument-1, and B is # of bytes
+    // 32 zero bits | ABCC
+    // A is
+    // B is which argument-1
+    // C is # of bytes
+    unsigned int arg_byte_output = 8;
 
+    string* test_arg;
     string temp_arg1 = arg1; //preserves original arguments
     string temp_arg2 = arg2;
 
@@ -343,35 +347,10 @@ bool assembler::resolve_instruction(int &error_amount, int &line_num, string mne
             if (!scan_template_file(mnem, arg1, arg2))
                 throw instruction_not_found();
         }
-        else if (temp_arg1 != "" && temp_arg2 == "") //one argument
+        else //one or two arguments
         {
             if (!scan_template_file(mnem, arg1, arg2))
             {
-                adjust_values(ARG_2B_CONST, &arg1); //substitute value with NN and try again
-                
-                if (!scan_template_file(mnem, arg1, arg2))
-                {
-                    arg1 = temp_arg1;
-                    adjust_values(ARG_1B_CONST, &arg1); //substitute value with N and try again
-                    
-                    if (!scan_template_file(mnem, arg1, arg2))
-                    {
-                        adjust_values(ARG_1B_DISP, &arg1);
-                        
-                        if (!scan_template_file(mnem, arg1, arg2))
-                            throw instruction_not_found();
-                        else
-                            arg_byte_output = 1;
-                    }
-                    else arg_byte_output = 1;
-                }
-                else arg_byte_output = 2;
-            }
-        }
-        else //two arguments
-        {
-            if (!scan_template_file(mnem, arg1, arg2))
-            {	
                 if (bs_util::is_pointer(arg1))
                     arg1 = bs_util::remove_outer_chars(arg1);
                 
@@ -383,33 +362,29 @@ bool assembler::resolve_instruction(int &error_amount, int &line_num, string mne
                         arg2 = bs_util::remove_outer_chars(arg2);
                     
                     if (bs_util::is_all_numeric(arg2))
-                        arg_byte_output = 4; //set to arg2 output mode
+                        arg_byte_output = arg_byte_output | 4; //set B to indicate arg2 as output bytes
                     
                     test_arg = &arg2;
                 }
-                
+
+                arg_byte_output = arg_byte_output & ~8; //lower bit A to indicate we need to keep looking
+
                 arg1 = temp_arg1;
                 arg2 = temp_arg2;
                 adjust_values(ARG_2B_CONST, test_arg); //substitute value with NN and try again
+            }
 
+            for (int i = 0; i < 3 && ((arg_byte_output & 8) == 0); i++)
+            {
                 if (!scan_template_file(mnem, arg1, arg2))
                 {
+                    if (i == 2) throw instruction_not_found();
                     arg1 = temp_arg1;
                     arg2 = temp_arg2;
-                    adjust_values(ARG_1B_CONST, test_arg); //substitute value with N and try again
-                    
-                    if (!scan_template_file(mnem, arg1, arg2))
-                    {
-                        adjust_values(ARG_1B_DISP, test_arg);
-                        
-                        if (!scan_template_file(mnem, arg1, arg2))
-                            throw instruction_not_found();
-                        else
-                            arg_byte_output = arg_byte_output | 1;
-                    }
-                    else arg_byte_output = arg_byte_output | 1;
+                    adjust_values(i+1, test_arg); //substitute dummy var and try again
                 }
-                else arg_byte_output = arg_byte_output | 2;
+                else //found it: raise bit A, and set C as one or two byte arg
+                    arg_byte_output = arg_byte_output | (i == 0 ? (8|2) : (8|1)); 
             }
         }
     }
@@ -430,12 +405,10 @@ bool assembler::resolve_instruction(int &error_amount, int &line_num, string mne
     
     outbytes.push_back(inst_value); //push on the opcode
     
-    if ((arg_byte_output & 3) != 0) //non-zero values indicate we need to push on the argument
+    if ((arg_byte_output & 3) > 0) //non-zero values indicate we need to push on the argument
     {
-        if ((arg_byte_output & 4) == 4) //decide which argument gets pushed
-            test_arg = &temp_arg2;
-        else
-            test_arg = &temp_arg1;
+        //decide which argument gets pushed
+        test_arg = ((arg_byte_output & 4) == 4 ? &temp_arg2 : &temp_arg1);
         
         switch (arg_byte_output & 3) //decide what to do depending on the size of the output
         {
@@ -455,6 +428,11 @@ bool assembler::resolve_instruction(int &error_amount, int &line_num, string mne
     return true;
 }
 
+void assembler::process_label_arguments(string &arg1, string &arg2)
+{
+
+}
+
 void assembler::resolve_label_addresses(int &line_num, int &next_line)
 {
     if (next_line > 0 && next_line == line_num)
@@ -463,7 +441,7 @@ void assembler::resolve_label_addresses(int &line_num, int &next_line)
         
         while (labels[item]->line < line_num)
         {
-            if (item < labels.size()-1) //minus one prevents overflow
+            if (item < labels.size()-1)
                 item++;
             else
             {
@@ -474,10 +452,9 @@ void assembler::resolve_label_addresses(int &line_num, int &next_line)
         
         while (labels[item]->line == line_num)
         {
-            labels[item]->value = byte_count + 1;
-            //plus one puts our location at the byte after the label instead of before
+            labels[item]->value = byte_count;
             
-            if (item < labels.size()-1) //minus one prevents overflow
+            if (item < labels.size()-1)
                 item++;
             else
             {
