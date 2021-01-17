@@ -47,9 +47,9 @@ int main(int argc, char* argv[])
     
     if (!pr->errors_exist)
     {
-        assembler* ir = new assembler();
+        assembler* ir = new assembler(input_file+".combined", tpl);
         ir->take_label_table(&pr->labels);
-        ir->run(input_file + ".combined", tpl);
+        ir->run();
         delete ir;
     }
     

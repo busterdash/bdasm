@@ -38,111 +38,58 @@ struct corrupt_template : public exception
     const char* what() const throw() { return "template file corruption"; }
 };
 
-assembler::assembler()
+assembler::assembler(string instfile, string tplfile)
 {
     byte_count = 0;
-    clear_info_set();
+
+    filename_tpl = tplfile;
+    filename_inst = instfile;
+    stream_tpl.open(filename_tpl.c_str(), ios::binary|ios::in);
+    stream_inst.open(filename_inst.c_str());
 }
 
-void assembler::display_error(int line_num, string err_msg)
-{	
-    cout << "Assembly error, in " << in_filename;
-    cout << " at line " << line_num << " -> " << err_msg << ' ' << mnemonic;
-    
-    if (argument1 != "")
-    {
-        cout << ' ' << argument1;
-        
-        if (argument2 != "")
-            cout << ',' << argument2;
-    }
-    
-    cout << endl;
-}
-        
-void assembler::read(string instruction)
+void assembler::take_label_table(vector<label*>* table)
 {
-    int inst_char_iter = 0;
-    int read_stage = 0;
-    char ic;
-    
-    //run through the characters of an instruction
-    while (inst_char_iter < instruction.length())
-    {
-        ic = instruction[inst_char_iter];
-        
-        if (read_stage == 0) //read in the mnemonic of the instruction
-        {
-            if (ic != ' ')
-                mnemonic += ic;
-            else
-                read_stage = 1;
-        }
-        else if (read_stage == 1) //read in the first argument of the instruction
-        {
-            if (ic != ',')
-                argument1 += ic;
-            else
-                read_stage = 2;
-        }
-        else //read in the second argument of the instruction
-            argument2 += ic;
-            
-        inst_char_iter++;
-    }
-    
-    argument1 = bs_util::trim(argument1);
-    argument2 = bs_util::trim_left(argument2);
+    labels = *table;
 }
 
-string assembler::get_mnemonic()  { return mnemonic;  }
-string assembler::get_argument1() { return argument1; }
-string assembler::get_argument2() { return argument2; }
-
-void assembler::clear_info_set()
+void assembler::run()
 {
-    mnemonic = "";
-    argument1 = "";
-    argument2 = "";
-    line_is_label = false;
-}
-
-void assembler::run(string instfile, string tplfile)
-{
-    int tpl_inst_count;
     int line_number = 0;
     int error_count = 0;
     int next_label_line = 0; //we wait until we get to a label so we can give it an accurate address
-    
     string instline;
-    ifstream tplstream;
-    ifstream inststream;
-    tplstream.open(tplfile.c_str(), ios::binary|ios::in);
-    inststream.open(instfile.c_str());
-    in_filename = instfile;
     
     if (labels.size() > 0) //priming the system that resolves label addresses
         next_label_line = labels[0]->line;
     
-    if (tplstream.is_open() && inststream.is_open())
+    if (stream_tpl.is_open() && stream_inst.is_open())
     {	
-        if (!template_file_check(tplstream, tpl_inst_count, tplfile))
+        if (!template_file_check())
         {
-            tplstream.close();
-            inststream.close();
+            stream_tpl.close();
+            stream_inst.close();
             return;
         }
         
         //begin reading user instructions
-        while (getline(inststream, instline))
+        while (getline(stream_inst, instline))
         {
+            string mnemonic;
+            string argument1;
+            string argument2;
+
             line_number++;
-            instline = bs_util::trim(instline);
-            if (instline.length() == 0) continue;
-            read(instline);
+
+            if (instline.length() == 0)
+                continue;
+
+            read(instline, mnemonic, argument1, argument2);
+
             resolve_label_addresses(line_number, next_label_line);
-            if (!resolve_instruction(error_count, line_number, tplstream, tpl_inst_count, argument1, argument2)) break;
-            clear_info_set();
+
+            if (!resolve_instruction(error_count, line_number, mnemonic, argument1, argument2))
+                break;
         }
         
         if (error_count == 0)
@@ -160,135 +107,68 @@ void assembler::run(string instfile, string tplfile)
     }
     else cout << "File(s) could not be opened to read!" << endl;
     
-    tplstream.close();
-    inststream.close();
+    stream_tpl.close();
+    stream_inst.close();
 }
 
-bool assembler::resolve_instruction(int &error_amount, int &line_num, ifstream &tpl, int &inst_count, string arg1, string arg2)
+void assembler::read(string instruction, string &mnem, string &arg1, string &arg2)
 {
-    string* test_arg;
-    int arg_byte_output = 0; //28x0 0ABB where A is which argument-1, and B is # of bytes
-    
-    try
-    {
-        if (argument1 == "" && argument2 == "") //zero arguments
-        {
-            if (!scan_template_file(tpl, inst_count, arg1, arg2))
-                throw instruction_not_found();
-        }
-        else if (argument1 != "" && argument2 == "") //one argument
-        {
-            if (!scan_template_file(tpl, inst_count, arg1, arg2))
-            {
-                adjust_values_first_pass(&arg1); //substitute value with NN and try again
-                
-                if (!scan_template_file(tpl, inst_count, arg1, arg2))
-                {
-                    arg1 = argument1;
-                    adjust_values_second_pass(&arg1); //substitute value with N and try again
-                    
-                    if (!scan_template_file(tpl, inst_count, arg1, arg2))
-                    {
-                        adjust_values_third_pass(&arg1);
-                        
-                        if (!scan_template_file(tpl, inst_count, arg1, arg2))
-                            throw instruction_not_found();
-                        else
-                            arg_byte_output = 1;
-                    }
-                    else arg_byte_output = 1;
-                }
-                else arg_byte_output = 2;
-            }
-        }
-        else //two arguments
-        {
-            if (!scan_template_file(tpl, inst_count, arg1, arg2))
-            {	
-                if (bs_util::is_pointer(arg1))
-                    arg1 = bs_util::remove_outer_chars(arg1);
-                
-                if (bs_util::is_all_numeric(arg1)) //testing to see if arg1 is a const pointer
-                    test_arg = &arg1;
-                else
-                {
-                    if (bs_util::is_pointer(arg2)) //arg1 isn't a const pointer, let's see if arg2 is
-                        arg2 = bs_util::remove_outer_chars(arg2);
-                    
-                    if (bs_util::is_all_numeric(arg2))
-                        arg_byte_output = 4; //set to arg2 output mode
-                    
-                    test_arg = &arg2;
-                }
-                
-                arg1 = argument1;
-                arg2 = argument2;
-                adjust_values_first_pass(test_arg); //substitute value with NN and try again
+    char ic; //instruction character
 
-                if (!scan_template_file(tpl, inst_count, arg1, arg2))
-                {
-                    arg1 = argument1;
-                    arg2 = argument2;
-                    adjust_values_second_pass(test_arg); //substitute value with N and try again
-                    
-                    if (!scan_template_file(tpl, inst_count, arg1, arg2))
-                    {
-                        adjust_values_third_pass(test_arg);
-                        
-                        if (!scan_template_file(tpl, inst_count, arg1, arg2))
-                            throw instruction_not_found();
-                        else
-                            arg_byte_output = arg_byte_output | 1;
-                    }
-                    else arg_byte_output = arg_byte_output | 1;
-                }
-                else arg_byte_output = arg_byte_output | 2;
-            }
+    //run through the characters of an instruction
+    for (int i = 0, j = instruction.length(), k = 0; i < j; i++)
+    {
+        ic = instruction[i];
+
+        //split the instruction into a mnemonic and 0-2 arguments
+        switch (k)
+        {
+            case 0: if (ic != ' ') mnem += ic; else k = 1; break;
+            case 1: if (ic != ',') arg1 += ic; else k = 2; break;
+            default: arg2 += ic; break;
         }
     }
-    catch (exception &e)
+    
+    mnem = bs_util::trim(mnem);
+    arg1 = bs_util::trim(arg1);
+    arg2 = bs_util::trim(arg2);
+}
+
+bool assembler::template_file_check()
+{
+    char read_buffer;
+    const short FORMAT_CHECK_SIZE = 5;
+    char format_check[FORMAT_CHECK_SIZE+1];
+    int version_check;
+    
+    //check if template file is correct
+    stream_tpl.read(format_check, sizeof(char)*FORMAT_CHECK_SIZE);
+    format_check[FORMAT_CHECK_SIZE] = '\0'; //null terminated string
+    
+    if (string(format_check) != "siasm")
     {
-        display_error(line_num,e.what());
-        error_amount++;
+        cout << filename_tpl << " is not of the correct format!" << endl;
         return false;
     }
     
-    byte_count += (arg_byte_output & 3) + 1; //number of bytes for argument plus opcode byte
+    //check if template file is of the correct version
+    stream_tpl.get(read_buffer);
+    version_check = (uchar)read_buffer;
     
-    if (inst_prefix != 0)
+    if (version_check != version)
     {
-        outbytes.push_back(inst_prefix); //push any potential opcode prefixes
-        byte_count++;
+        cout << filename_tpl << " is outdated. Cannot continue!" << endl;
+        return false;
     }
     
-    outbytes.push_back(inst_value); //push on the opcode
+    //get instruction count from template file
+    stream_tpl.get(read_buffer);
+    tpl_inst_count = (uchar)read_buffer;
     
-    if ((arg_byte_output & 3) != 0) //non-zero values indicate we need to push on the argument
-    {
-        if ((arg_byte_output & 4) == 4) //decide which argument gets pushed
-            test_arg = &argument2;
-        else
-            test_arg = &argument1;
-        
-        switch (arg_byte_output & 3) //decide what to do depending on the size of the output
-        {
-            case 1:
-                outbytes.push_back(atoi(test_arg->c_str()));
-            break;
-            
-            case 2:
-                if (bs_util::is_pointer(*test_arg))
-                    *test_arg = bs_util::remove_outer_chars(*test_arg);	
-                outbytes.push_back(bs_util::num_get_lsb(atoi(test_arg->c_str())));
-                outbytes.push_back(bs_util::num_get_msb(atoi(test_arg->c_str())));
-            break;
-        }
-    }
-    
-    return true;
+    return true; //true indicates the file passes the check
 }
 
-bool assembler::scan_template_file(ifstream &tpl, int inst_count, string arg1, string arg2)
+bool assembler::scan_template_file(string mnem, string arg1, string arg2)
 {
     bool      complete = false;
     char      read_buffer;
@@ -299,29 +179,29 @@ bool assembler::scan_template_file(ifstream &tpl, int inst_count, string arg1, s
     int       arg_combo_num;
     const int ARG_BYTES = 4;
     char      arg_combo[ARG_BYTES];
-    int       inst_crnt = 0;        //current instruction
+    int       inst_crnt = 0;                        //current instruction
     
-    tpl.seekg(7,tpl.beg); //move to beginnning of search section after file version
+    stream_tpl.seekg(7,stream_tpl.beg);             //move to beginnning of search section after file version
     
-    while (inst_crnt < inst_count && !complete)
+    while (inst_crnt < tpl_inst_count && !complete)
     {
-        tpl.read(&inst_byte1,sizeof(char));  //read first byte to tell us length of instruction string
+        stream_tpl.read(&inst_byte1, sizeof(char)); //read first byte to tell us length of instruction string
         
         //instruction name
-        name_length = (inst_byte1 & 3) + 2;  //length is the rightmost two bits, 00 = 2, 10 = 4
-        inst_name = new char[name_length+1]; //plus one is for null character
-        tpl.read(inst_name,name_length);     //get the name characters
-        inst_name[name_length] = '\0';       //end the string
+        name_length = (inst_byte1 & 3) + 2;         //length is the rightmost two bits, 00 = 2, 10 = 4
+        inst_name = new char[name_length+1];        //plus one for null terminator
+        stream_tpl.read(inst_name, name_length);    //get the name characters
+        inst_name[name_length] = '\0';              //end the string
         
         //argument combinations
-        tpl.read(&read_buffer,sizeof(char));
+        stream_tpl.read(&read_buffer, sizeof(char));
         arg_combo_num = (uchar)read_buffer;
         
-        if (string(inst_name) == mnemonic)
+        if (string(inst_name) == mnem)
         {
             for (int i = 0; i < arg_combo_num; i++)
             {
-                tpl.read(arg_combo,sizeof(char)*ARG_BYTES);
+                stream_tpl.read(arg_combo, sizeof(char)*ARG_BYTES);
                 
                 if ((int)(uchar)arg_combo[0] == table_of_arguments(arg1))
                 {
@@ -335,7 +215,8 @@ bool assembler::scan_template_file(ifstream &tpl, int inst_count, string arg1, s
                 }
             }
         }
-        else tpl.seekg(4*((int)(uchar)read_buffer),tpl.cur); //skip to next instruction
+        else //skip to next instruction
+            stream_tpl.seekg(4*((int)(uchar)read_buffer), stream_tpl.cur);
         
         inst_crnt++;
         delete inst_name;
@@ -347,7 +228,7 @@ bool assembler::scan_template_file(ifstream &tpl, int inst_count, string arg1, s
 int assembler::table_of_arguments(string arg)
 {
     int output = -1;
-    const int table_length = 48; //This value will need to change if you update the table.
+    const int table_length = 48; //this value will need to change if you update the table
     
     static const char* table[table_length] = {
         "",     "N",  "NN",  "(NN)", "DIS", "$",
@@ -374,104 +255,204 @@ int assembler::table_of_arguments(string arg)
     return output;
 }
 
-bool assembler::template_file_check(ifstream &tpl, int &inst_num, string &filename)
+void assembler::adjust_values(int pass, string *arg)
 {
-    char read_buffer;
-    const short FORMAT_CHECK_SIZE = 5;
-    char format_check[FORMAT_CHECK_SIZE+1];
-    int version_check;
-    
-    //check if template file is correct
-    tpl.read(format_check,sizeof(char)*FORMAT_CHECK_SIZE);
-    format_check[FORMAT_CHECK_SIZE] = '\0'; //null terminated string
-    
-    if (string(format_check) != "siasm")
+    switch (pass)
     {
-        cout << filename << " is not of the correct format!" << endl;
-        return false;
-    }
-    
-    //check if template file is of the correct version
-    tpl.get(read_buffer);
-    version_check = (uchar)read_buffer;
-    
-    if (version_check != version)
-    {
-        cout << filename << " is outdated. Cannot continue!" << endl;
-        return false;
-    }
-    
-    //get instruction count from template file
-    tpl.get(read_buffer);
-    inst_num = (uchar)read_buffer;
-    
-    return true; //true indicates the file passes the check
-}
-
-void assembler::adjust_values_first_pass(string *arg)
-{
-    bool is_pointer = false;
-    bool is_label = false;
-    string arg_copy = *arg;
-    
-    if (bs_util::is_pointer(*arg))
-    {
-        arg_copy = bs_util::remove_outer_chars(*arg);
-        is_pointer = true;
-    }
-    
-    if (bs_util::is_all_numeric(arg_copy))
-    {
-        if (bs_util::can_be_two_byte_value(atoi((arg_copy).c_str())))
+        case ARG_2B_CONST:
         {
-            if (is_pointer)
-                *arg = "(NN)";
-            else
-                *arg = "NN";
-        }
-        else throw argument_out_of_range();
-    }
-    else
-    {
-        for (int i = 0; i < labels.size(); i++)
-            is_label = (is_label || arg_copy == labels[i]->name);
-        
-        if (is_label)
-        {
-            cout << "Found a label here." << endl;
+            bool is_pointer = false;
+            bool is_label = false;
+            string arg_copy = *arg;
             
-            if (is_pointer)
-                *arg = "(NN)";
+            if (bs_util::is_pointer(*arg))
+            {
+                arg_copy = bs_util::remove_outer_chars(*arg);
+                is_pointer = true;
+            }
+            
+            if (bs_util::is_all_numeric(arg_copy))
+            {
+                if (bs_util::can_be_two_byte_value(atoi((arg_copy).c_str())))
+                {
+                    if (is_pointer)
+                        *arg = "(NN)";
+                    else
+                        *arg = "NN";
+                }
+                else throw argument_out_of_range();
+            }
             else
-                *arg = "NN";	
+            {
+                for (int i = 0; i < labels.size(); i++)
+                    is_label = (is_label || arg_copy == labels[i]->name);
+                
+                if (is_label)
+                {
+                    cout << "Found a label here." << endl;
+                    
+                    if (is_pointer)
+                        *arg = "(NN)";
+                    else
+                        *arg = "NN";	
+                }
+                else throw instruction_not_found();
+            }
+
+            break;
         }
-        else throw instruction_not_found();
+
+        case ARG_1B_CONST:
+        {
+            if (bs_util::can_be_one_byte_value(atoi((*arg).c_str())))
+            {
+                if (bs_util::is_pointer(*arg)) //eight-bit values are never pointers
+                    throw instruction_not_found();
+                else
+                    *arg = "N";
+            }
+            else throw argument_out_of_range();
+
+            break;
+        }
+
+        case ARG_1B_DISP:
+        {
+            if (bs_util::can_be_signed_one_byte_value(atoi((*arg).c_str())))
+                *arg = "DIS";
+            else
+                throw argument_out_of_range();
+            
+            break;
+        }
     }
 }
 
-void assembler::adjust_values_second_pass(string *arg)
+bool assembler::resolve_instruction(int &error_amount, int &line_num, string mnem, string arg1, string arg2)
 {
-    if (bs_util::can_be_one_byte_value(atoi((*arg).c_str())))
+    string* test_arg;
+    int arg_byte_output = 0; //28x0 0ABB where A is which argument-1, and B is # of bytes
+
+    string temp_arg1 = arg1; //preserves original arguments
+    string temp_arg2 = arg2;
+
+    try
     {
-        if (bs_util::is_pointer(*arg)) //eight-bit values are never pointers
-            throw instruction_not_found();
-        else
-            *arg = "N";
+        if (temp_arg1 == "" && temp_arg2 == "") //zero arguments
+        {
+            if (!scan_template_file(mnem, arg1, arg2))
+                throw instruction_not_found();
+        }
+        else if (temp_arg1 != "" && temp_arg2 == "") //one argument
+        {
+            if (!scan_template_file(mnem, arg1, arg2))
+            {
+                adjust_values(ARG_2B_CONST, &arg1); //substitute value with NN and try again
+                
+                if (!scan_template_file(mnem, arg1, arg2))
+                {
+                    arg1 = temp_arg1;
+                    adjust_values(ARG_1B_CONST, &arg1); //substitute value with N and try again
+                    
+                    if (!scan_template_file(mnem, arg1, arg2))
+                    {
+                        adjust_values(ARG_1B_DISP, &arg1);
+                        
+                        if (!scan_template_file(mnem, arg1, arg2))
+                            throw instruction_not_found();
+                        else
+                            arg_byte_output = 1;
+                    }
+                    else arg_byte_output = 1;
+                }
+                else arg_byte_output = 2;
+            }
+        }
+        else //two arguments
+        {
+            if (!scan_template_file(mnem, arg1, arg2))
+            {	
+                if (bs_util::is_pointer(arg1))
+                    arg1 = bs_util::remove_outer_chars(arg1);
+                
+                if (bs_util::is_all_numeric(arg1)) //testing to see if arg1 is a const pointer
+                    test_arg = &arg1;
+                else
+                {
+                    if (bs_util::is_pointer(arg2)) //arg1 isn't a const pointer, let's see if arg2 is
+                        arg2 = bs_util::remove_outer_chars(arg2);
+                    
+                    if (bs_util::is_all_numeric(arg2))
+                        arg_byte_output = 4; //set to arg2 output mode
+                    
+                    test_arg = &arg2;
+                }
+                
+                arg1 = temp_arg1;
+                arg2 = temp_arg2;
+                adjust_values(ARG_2B_CONST, test_arg); //substitute value with NN and try again
+
+                if (!scan_template_file(mnem, arg1, arg2))
+                {
+                    arg1 = temp_arg1;
+                    arg2 = temp_arg2;
+                    adjust_values(ARG_1B_CONST, test_arg); //substitute value with N and try again
+                    
+                    if (!scan_template_file(mnem, arg1, arg2))
+                    {
+                        adjust_values(ARG_1B_DISP, test_arg);
+                        
+                        if (!scan_template_file(mnem, arg1, arg2))
+                            throw instruction_not_found();
+                        else
+                            arg_byte_output = arg_byte_output | 1;
+                    }
+                    else arg_byte_output = arg_byte_output | 1;
+                }
+                else arg_byte_output = arg_byte_output | 2;
+            }
+        }
     }
-    else throw argument_out_of_range();
-}
-
-void assembler::adjust_values_third_pass(string *arg)
-{
-    if (bs_util::can_be_signed_one_byte_value(atoi((*arg).c_str())))
-        *arg = "DIS";
-    else
-        throw argument_out_of_range();
-}
-
-void assembler::take_label_table(vector<label*>* table)
-{
-    labels = *table;
+    catch (exception &e)
+    {
+        display_error(line_num, e.what(), mnem, arg1, arg2);
+        error_amount++;
+        return false;
+    }
+    
+    byte_count += (arg_byte_output & 3) + 1; //number of bytes for argument plus opcode byte
+    
+    if (inst_prefix != 0)
+    {
+        outbytes.push_back(inst_prefix); //push any potential opcode prefixes
+        byte_count++;
+    }
+    
+    outbytes.push_back(inst_value); //push on the opcode
+    
+    if ((arg_byte_output & 3) != 0) //non-zero values indicate we need to push on the argument
+    {
+        if ((arg_byte_output & 4) == 4) //decide which argument gets pushed
+            test_arg = &temp_arg2;
+        else
+            test_arg = &temp_arg1;
+        
+        switch (arg_byte_output & 3) //decide what to do depending on the size of the output
+        {
+            case 1:
+                outbytes.push_back(atoi(test_arg->c_str()));
+            break;
+            
+            case 2:
+                if (bs_util::is_pointer(*test_arg))
+                    *test_arg = bs_util::remove_outer_chars(*test_arg);	
+                outbytes.push_back(bs_util::num_get_lsb(atoi(test_arg->c_str())));
+                outbytes.push_back(bs_util::num_get_msb(atoi(test_arg->c_str())));
+            break;
+        }
+    }
+    
+    return true;
 }
 
 void assembler::resolve_label_addresses(int &line_num, int &next_line)
@@ -509,3 +490,18 @@ void assembler::resolve_label_addresses(int &line_num, int &next_line)
     }
 }
 
+void assembler::display_error(int line_num, string err_msg, string mnem, string arg1, string arg2)
+{	
+    cout << "Assembly error, in " << filename_inst;
+    cout << " at line " << line_num << " -> " << err_msg << ' ' << mnem;
+    
+    if (arg1 != "")
+    {
+        cout << ' ' << arg1;
+        
+        if (arg2 != "")
+            cout << ',' << arg2;
+    }
+    
+    cout << endl;
+}
